@@ -13,7 +13,7 @@ import streamlit as st
 
 # 設定網頁標題與寬螢幕版面配置
 st.set_page_config(
-    page_title="寶特瓶降落傘物理分析系統",
+    page_title="寶特瓶降落傘阻力分析",
     page_icon="🪂",
     layout="wide"
 )
@@ -266,7 +266,7 @@ def fig_to_bytes(fig):
 # =====================================================================
 # 3. Streamlit 網頁主畫面佈局
 # =====================================================================
-st.title("🪂 寶特瓶降落傘探究與實作：物理分析系統")
+st.title("🪂 寶特瓶降落傘探究與實作：阻力分析系統")
 st.markdown("上傳各組降落傘的 Excel 數據檔，系統自動載入**實測樓高與全體平均重量**，繪製各傘組實測散布分佈！")
 
 st.sidebar.header("📁 資料匯入")
@@ -317,9 +317,9 @@ if uploaded_file is not None:
 
         # ZIP 下載按鈕
         st.download_button(
-            label="💾 一鍵下載所有獨立圖檔 (ZIP 壓縮包，內含 5 個獨立高解析度 PNG)",
+            label="💾 一鍵下載所有獨立圖檔 ",
             data=zip_bytes,
-            file_name="降落傘物理分析圖表_獨立圖檔打包.zip",
+            file_name="降落傘物理分析圖表.zip",
             mime="application/zip"
         )
 
@@ -358,7 +358,7 @@ if uploaded_file is not None:
         # 功能 2：整齊雙層結構數據表 + CSV 下載
         # =============================================================
         st.subheader("📋 物理量計算數據總表")
-        st.markdown("依據實測量次 1～20 完整呈現各傘滯空時間、平均加速度與平均阻力：")
+        st.markdown("依據實測量次 1～20 呈現各傘滯空時間、平均加速度與平均阻力：")
 
         # CSV 下載按鈕
         csv_bytes = df_csv.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
