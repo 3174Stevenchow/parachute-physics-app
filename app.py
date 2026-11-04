@@ -3,14 +3,13 @@ import io
 import matplotlib
 import zipfile
 
-# 強制指定非 GUI 後端
+# 強制指定非 GUI 後端，確保雲端伺服器順暢繪圖
 matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-from scipy.optimize import root_scalar
 
 # 設定網頁標題與寬螢幕版面配置
 st.set_page_config(
@@ -19,7 +18,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Matplotlib 中文字型設定
+# Matplotlib 中文字型設定 (相容 Linux 雲端與本地端)
 plt.rcParams['font.sans-serif'] = [
     'WenQuanYi Zen Hei',
     'Noto Sans CJK TC',
@@ -33,13 +32,13 @@ plt.rcParams['axes.unicode_minus'] = False
 
 
 # =====================================================================
-# 1. 數據讀取與基礎物理量計算
+# 1. 數據讀取與物理量計算 (純實測數據，無外部套件依賴)
 # =====================================================================
 def process_parachute_data(uploaded_file):
     xls = pd.ExcelFile(uploaded_file)
     df_raw = pd.read_excel(xls, sheet_name='數據記錄表')
 
-    # 自動讀取樓高平均值 (M12)
+    # (A) 自動讀取樓高平均值 (M12 儲存格)
     try:
         height_m = float(df_raw.iloc[10, 12])
         if np.isnan(height_m) or height_m <= 0:
@@ -47,7 +46,7 @@ def process_parachute_data(uploaded_file):
     except Exception:
         height_m = 8.33
 
-    # 自動讀取全體成員平均重量 (M5)
+    # (B) 自動讀取全體成員平均重量 (M5 儲存格)
     try:
         avg_weight_g = float(df_raw.iloc[3, 12])
         if np.isnan(avg_weight_g) or avg_weight_g <= 0:
@@ -56,13 +55,16 @@ def process_parachute_data(uploaded_file):
         avg_weight_g = 232.31
 
     avg_weight_kg = avg_weight_g / 1000.0
-    g = 9.8
+    g = 9.8  # 重力加速度 (m/s^2)
 
+    # (C) 讀取 4 組傘滯空時間數據 (B2:E21，量次 1~20)
     umbrella_names = ['傘1', '傘2', '傘3', '傘4']
     raw_times = df_raw.iloc[0:20, 1:5].copy()
     raw_times.columns = umbrella_names
 
-    t_matrix, a_matrix, f_matrix = [], [], []
+    t_matrix = []
+    a_matrix = []
+    f_matrix = []
     all_meas = {}
     active_umbrellas = []
 
@@ -70,7 +72,10 @@ def process_parachute_data(uploaded_file):
         col_series = raw_times[u_name].astype(str).str.replace(',', '.')
         times_clean = pd.to_numeric(col_series, errors='coerce').values
         
-        t_col, a_col, f_col, valid_pts = [], [], [], []
+        t_col = []
+        a_col = []
+        f_col = []
+        valid_pts = []
 
         for r_idx in range(20):
             val = times_clean[r_idx] if r_idx < len(times_clean) else np.nan
@@ -82,6 +87,7 @@ def process_parachute_data(uploaded_file):
                 t_col.append(round(t_val, 2))
                 a_col.append(round(a_val, 3))
                 f_col.append(round(f_val, 3))
+
                 valid_pts.append(t_val)
             else:
                 t_col.append('-')
@@ -99,7 +105,7 @@ def process_parachute_data(uploaded_file):
             f_arr = avg_weight_kg * (g - a_arr)
             all_meas[u_name] = {'times': t_arr, 'accels': a_arr, 'drags': f_arr}
 
-    # 建立雙層表頭資料表
+    # (D) 建立標準雙層寬表格 (比照截圖雙層標題排版)
     multi_cols = [('數據', '編號')] + \
                  [('滯空時間(秒)', u) for u in umbrella_names] + \
                  [('平均加速度(ms-2)', u) for u in umbrella_names] + \
@@ -116,6 +122,7 @@ def process_parachute_data(uploaded_file):
     df_display = pd.DataFrame(flat_data)
     df_display.columns = pd.MultiIndex.from_tuples(multi_cols)
 
+    # 匯出 CSV 用資料表
     csv_headers = ['編號'] + \
                   [f'滯空時間_{u}(秒)' for u in umbrella_names] + \
                   [f'平均加速度_{u}(ms-2)' for u in umbrella_names] + \
@@ -126,63 +133,21 @@ def process_parachute_data(uploaded_file):
 
 
 # =====================================================================
-# 2. 數值反推阻力模型 (由時間 t 反推動態阻力係數 k 與終端速度 vt)
+# 2. 獨立繪製 4 張個別實測圖表與 1 張總覽圖 (純實測)
 # =====================================================================
-def solve_drag_dynamics(active_umbrellas, all_meas, height_m, avg_weight_kg):
-    g = 9.8
-    drag_params = {}
-    time_series_data = {}
+color_map = {
+    '傘1': '#1f77b4',  # 藍
+    '傘2': '#2ca02c',  # 綠
+    '傘3': '#ff7f0e',  # 橘
+    '傘4': '#9467bd'   # 紫
+}
 
-    for u in active_umbrellas:
-        t_mean = float(np.mean(all_meas[u]['times']))
-
-        # 目標方程式：H(k) = (m/k) * ln(cosh(sqrt(k*g/m) * t)) - H = 0
-        def f_obj(k_val):
-            if k_val <= 1e-6:
-                return -height_m
-            alpha = np.sqrt(k_val * g / avg_weight_kg)
-            arg = np.clip(alpha * t_mean, 0, 700) # 防止溢位
-            h_calc = (avg_weight_kg / k_val) * np.log(np.cosh(arg))
-            return h_calc - height_m
-
-        try:
-            sol = root_scalar(f_obj, bracket=[1e-4, 10.0], method='brentq')
-            k_best = sol.root
-        except Exception:
-            # 簡化近似公式 k = mg / vt^2
-            vt_est = height_m / t_mean
-            k_best = (avg_weight_kg * g) / (vt_est ** 2)
-
-        # 終端速度 vt = sqrt(mg / k)
-        vt = np.sqrt(avg_weight_kg * g / k_best)
-        drag_params[u] = {'k': k_best, 'vt': vt, 't_mean': t_mean}
-
-        # 產生該傘整個下落過程的時間序列
-        t_sim = np.linspace(0, t_mean, 150)
-        alpha = np.sqrt(k_best * g / avg_weight_kg)
-        v_sim = vt * np.tanh(alpha * t_sim)
-        f_drag_sim = k_best * (v_sim ** 2)
-        a_sim = g - (f_drag_sim / avg_weight_kg)
-
-        time_series_data[u] = {
-            't': t_sim,
-            'v': v_sim,
-            'f_drag': f_drag_sim,
-            'a': a_sim
-        }
-
-    return drag_params, time_series_data
-
-
-# =====================================================================
-# 3. 獨立圖表繪製函式
-# =====================================================================
-color_map = {'傘1': '#1f77b4', '傘2': '#2ca02c', '傘3': '#ff7f0e', '傘4': '#9467bd'}
-
+# (1) 單獨繪製 a - t
 def plot_accel_time(active_umbrellas, all_meas):
     fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
     for u in active_umbrellas:
-        ax.scatter(all_meas[u]['times'], all_meas[u]['accels'], color=color_map.get(u, '#333'), s=65, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
+        ax.scatter(all_meas[u]['times'], all_meas[u]['accels'], 
+                   color=color_map.get(u, '#333'), s=65, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
     ax.set_title('平均加速度 vs. 滯空時間 ($a - t$)', fontsize=14, fontweight='bold')
     ax.set_xlabel('滯空時間 $t$ (秒)', fontsize=12)
     ax.set_ylabel('平均加速度 $\\bar{a}$ (m/s²)', fontsize=12)
@@ -191,10 +156,12 @@ def plot_accel_time(active_umbrellas, all_meas):
     plt.tight_layout()
     return fig
 
+# (2) 單獨繪製 F_drag - t
 def plot_drag_time(active_umbrellas, all_meas):
     fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
     for u in active_umbrellas:
-        ax.scatter(all_meas[u]['times'], all_meas[u]['drags'], color=color_map.get(u, '#333'), s=65, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
+        ax.scatter(all_meas[u]['times'], all_meas[u]['drags'], 
+                   color=color_map.get(u, '#333'), s=65, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
     ax.set_title('平均空氣阻力 vs. 滯空時間 ($F_{drag} - t$)', fontsize=14, fontweight='bold')
     ax.set_xlabel('滯空時間 $t$ (秒)', fontsize=12)
     ax.set_ylabel('平均空氣阻力 $\\bar{F}_{drag}$ (N)', fontsize=12)
@@ -203,10 +170,12 @@ def plot_drag_time(active_umbrellas, all_meas):
     plt.tight_layout()
     return fig
 
+# (3) 單獨繪製 F_drag - a
 def plot_drag_accel(active_umbrellas, all_meas):
     fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
     for u in active_umbrellas:
-        ax.scatter(all_meas[u]['accels'], all_meas[u]['drags'], color=color_map.get(u, '#333'), s=65, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
+        ax.scatter(all_meas[u]['accels'], all_meas[u]['drags'], 
+                   color=color_map.get(u, '#333'), s=65, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
     ax.set_title('平均空氣阻力 vs. 平均加速度 ($F_{drag} - a$)', fontsize=14, fontweight='bold')
     ax.set_xlabel('平均加速度 $\\bar{a}$ (m/s²)', fontsize=12)
     ax.set_ylabel('平均空氣阻力 $\\bar{F}_{drag}$ (N)', fontsize=12)
@@ -215,10 +184,12 @@ def plot_drag_accel(active_umbrellas, all_meas):
     plt.tight_layout()
     return fig
 
+# (4) 單獨繪製純實測箱形圖
 def plot_boxplot(active_umbrellas, all_meas):
     fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
     box_data = [all_meas[u]['times'] for u in active_umbrellas]
-    box = ax.boxplot(box_data, widths=0.5, patch_artist=True, medianprops=dict(color='black', linewidth=1.5))
+    box = ax.boxplot(box_data, widths=0.5, patch_artist=True,
+                      medianprops=dict(color='black', linewidth=1.5))
     for patch, u in zip(box['boxes'], active_umbrellas):
         patch.set_facecolor(color_map.get(u, '#666'))
         patch.set_alpha(0.75)
@@ -230,32 +201,59 @@ def plot_boxplot(active_umbrellas, all_meas):
     plt.tight_layout()
     return fig
 
-# 新增：動態阻力隨時間連續變化圖
-def plot_dynamic_drag_curves(active_umbrellas, time_series_data):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5), dpi=150)
-    fig.suptitle('【理論反推】降落傘下落過程之連續動態阻力與速度重建', fontsize=15, fontweight='bold')
+# (5) 繪製四合一綜合總覽圖 (純實測)
+def plot_combined_figure(active_umbrellas, all_meas):
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10), dpi=150)
+    fig.suptitle('【傘1～傘4】實際測量數據之全體物理量對比', fontsize=16, fontweight='bold')
 
+    # a - t
+    ax1 = axes[0, 0]
     for u in active_umbrellas:
-        c = color_map.get(u, '#333')
-        data = time_series_data[u]
-        ax1.plot(data['t'], data['f_drag'], color=c, linewidth=2.5, label=f'{u}')
-        ax2.plot(data['t'], data['v'], color=c, linewidth=2.5, label=f'{u}')
-
-    ax1.set_title('即時空氣阻力隨時間變化 $F_{drag}(t)$', fontsize=13, fontweight='bold')
-    ax1.set_xlabel('下落時間 $t$ (秒)', fontsize=11)
-    ax1.set_ylabel('即時阻力 (N)', fontsize=11)
+        ax1.scatter(all_meas[u]['times'], all_meas[u]['accels'], color=color_map.get(u, '#333'), s=55, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
+    ax1.set_title('平均加速度 vs. 滯空時間 ($a - t$)', fontsize=13, fontweight='bold')
+    ax1.set_xlabel('滯空時間 $t$ (秒)', fontsize=11)
+    ax1.set_ylabel('平均加速度 $\\bar{a}$ (m/s²)', fontsize=11)
     ax1.grid(True, linestyle='--', alpha=0.5)
-    ax1.legend(fontsize=10)
+    ax1.legend(fontsize=9)
 
-    ax2.set_title('下落速率隨時間變化 $v(t)$ (趨向終端速度)', fontsize=13, fontweight='bold')
-    ax2.set_xlabel('下落時間 $t$ (秒)', fontsize=11)
-    ax2.set_ylabel('下落速率 $v$ (m/s)', fontsize=11)
+    # F - t
+    ax2 = axes[0, 1]
+    for u in active_umbrellas:
+        ax2.scatter(all_meas[u]['times'], all_meas[u]['drags'], color=color_map.get(u, '#333'), s=55, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
+    ax2.set_title('平均空氣阻力 vs. 滯空時間 ($F_{drag} - t$)', fontsize=13, fontweight='bold')
+    ax2.set_xlabel('滯空時間 $t$ (秒)', fontsize=11)
+    ax2.set_ylabel('平均空氣阻力 $\\bar{F}_{drag}$ (N)', fontsize=11)
     ax2.grid(True, linestyle='--', alpha=0.5)
-    ax2.legend(fontsize=10)
+    ax2.legend(fontsize=9)
+
+    # F - a
+    ax3 = axes[1, 0]
+    for u in active_umbrellas:
+        ax3.scatter(all_meas[u]['accels'], all_meas[u]['drags'], color=color_map.get(u, '#333'), s=55, alpha=0.85, edgecolors='k', label=f'{u} (實測)')
+    ax3.set_title('平均空氣阻力 vs. 平均加速度 ($F_{drag} - a$)', fontsize=13, fontweight='bold')
+    ax3.set_xlabel('平均加速度 $\\bar{a}$ (m/s²)', fontsize=11)
+    ax3.set_ylabel('平均空氣阻力 $\\bar{F}_{drag}$ (N)', fontsize=11)
+    ax3.grid(True, linestyle='--', alpha=0.5)
+    ax3.legend(fontsize=9)
+
+    # 箱形圖
+    ax4 = axes[1, 1]
+    box_data = [all_meas[u]['times'] for u in active_umbrellas]
+    box = ax4.boxplot(box_data, widths=0.5, patch_artist=True, medianprops=dict(color='black', linewidth=1.5))
+    for patch, u in zip(box['boxes'], active_umbrellas):
+        patch.set_facecolor(color_map.get(u, '#666'))
+        patch.set_alpha(0.75)
+    ax4.set_xticks(range(1, len(active_umbrellas) + 1))
+    ax4.set_xticklabels(active_umbrellas, fontsize=11)
+    ax4.set_title('各組降落傘滯空時間分佈箱形圖 (實測值)', fontsize=13, fontweight='bold')
+    ax4.set_ylabel('滯空時間 (秒)', fontsize=11)
+    ax4.grid(True, linestyle='--', alpha=0.5)
 
     plt.tight_layout()
     return fig
 
+
+# 輔助函式：將圖表轉換為 PNG bytes
 def fig_to_bytes(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
@@ -264,10 +262,10 @@ def fig_to_bytes(fig):
 
 
 # =====================================================================
-# 4. Streamlit 網頁畫面佈局
+# 3. Streamlit 網頁主畫面佈局
 # =====================================================================
 st.title("🪂 寶特瓶降落傘探究與實作：物理分析系統")
-st.markdown("上傳各組降落傘的 Excel 數據檔，系統自動載入**實測樓高與全體平均重量**，完成實測分佈統計與**阻力動態逆推**！")
+st.markdown("上傳各組降落傘的 Excel 數據檔，系統自動載入**實測樓高與全體平均重量**，繪製各傘組實測散布分佈！")
 
 st.sidebar.header("📁 資料匯入")
 uploaded_file = st.sidebar.file_uploader("請選擇 Excel 數據表 (.xlsx)", type=["xlsx"])
@@ -275,10 +273,6 @@ uploaded_file = st.sidebar.file_uploader("請選擇 Excel 數據表 (.xlsx)", ty
 if uploaded_file is not None:
     try:
         active_umbrellas, all_meas, used_h, avg_w, df_display, df_csv = process_parachute_data(uploaded_file)
-        avg_weight_kg = avg_w / 1000.0
-
-        # 反推各傘阻力常數 k 與終端速度 vt
-        drag_params, time_series_data = solve_drag_dynamics(active_umbrellas, all_meas, used_h, avg_weight_kg)
 
         # 頂部參數摘要卡片
         st.html(f"""
@@ -289,32 +283,37 @@ if uploaded_file is not None:
                 <div>⚖️ <b>全體平均重量 (M5)：</b> <span style="color:#b45309; font-weight:bold;">{avg_w:.2f} 公克</span></div>
                 <div>🪂 <b>有效實測傘組：</b> <span style="color:#047857; font-weight:bold;">{', '.join(active_umbrellas)}</span></div>
             </div>
+            <div style="margin-top: 8px; font-size: 13px; color: #4b5563;">
+                💡 說明：所有傘組之空氣阻力計算，皆統一採用全體平均質量 m = {avg_w/1000.0:.4f} kg 與平均高度 H = {used_h:.3f} m。
+            </div>
         </div>
         """)
 
         st.divider()
 
         # =============================================================
-        # 功能 1：實測圖表展示與 ZIP 打包下載
+        # 功能 1：獨立圖表繪製、網頁展示與 ZIP 打包下載 (無模擬線)
         # =============================================================
         st.subheader("📊 實測物理量關聯分析圖表")
 
+        # 產出 4 張獨立圖表與 1 張總覽圖
         bytes_at = fig_to_bytes(plot_accel_time(active_umbrellas, all_meas))
         bytes_ft = fig_to_bytes(plot_drag_time(active_umbrellas, all_meas))
         bytes_fa = fig_to_bytes(plot_drag_accel(active_umbrellas, all_meas))
         bytes_box = fig_to_bytes(plot_boxplot(active_umbrellas, all_meas))
-        bytes_dyn = fig_to_bytes(plot_dynamic_drag_curves(active_umbrellas, time_series_data))
+        bytes_comb = fig_to_bytes(plot_combined_figure(active_umbrellas, all_meas))
 
-        # 打包 ZIP 壓縮檔
+        # 打包為 ZIP 壓縮檔
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             zip_file.writestr("1_平均加速度vs滯空時間(a-t).png", bytes_at)
             zip_file.writestr("2_平均空氣阻力vs滯空時間(F_drag-t).png", bytes_ft)
             zip_file.writestr("3_平均空氣阻力vs平均加速度(F_drag-a).png", bytes_fa)
             zip_file.writestr("4_各組降落傘滯空時間分佈箱形圖.png", bytes_box)
-            zip_file.writestr("5_即時阻力與下落速率動態連續曲線.png", bytes_dyn)
+            zip_file.writestr("5_四象限物理分析綜合全覽圖.png", bytes_comb)
         zip_bytes = zip_buffer.getvalue()
 
+        # ZIP 下載按鈕
         st.download_button(
             label="💾 一鍵下載所有獨立圖檔 (ZIP 壓縮包，內含 5 個獨立高解析度 PNG)",
             data=zip_bytes,
@@ -324,7 +323,7 @@ if uploaded_file is not None:
 
         st.write("")
 
-        # 網頁以 2x2 呈現 4 張實測散布圖
+        # 網頁以 2x2 網格呈現 4 張獨立圖表
         b64_at = base64.b64encode(bytes_at).decode('utf-8')
         b64_ft = base64.b64encode(bytes_ft).decode('utf-8')
         b64_fa = base64.b64encode(bytes_fa).decode('utf-8')
@@ -354,43 +353,12 @@ if uploaded_file is not None:
         st.divider()
 
         # =============================================================
-        # 功能 2：進階物理分析：微分方程反推阻力變化
-        # =============================================================
-        st.subheader("🔬 探究延伸：從落地總時間逆推「阻力隨時間之動態變化」")
-        st.markdown("""
-        即使受限於工具僅記錄落地時間，我們仍可藉由空氣動力學運動方程式 $m\\frac{dv}{dt} = mg - kv^2$，
-        數值求解各傘的**阻力係數 $k$** 與**終端速度 $v_t$**，進而還原出下落全程的即時阻力變化：
-        """)
-
-        # 呈現反推結果表格
-        param_rows = []
-        for u in active_umbrellas:
-            p = drag_params[u]
-            param_rows.append({
-                '降落傘組別': u,
-                '平均滯空時間 (s)': round(p['t_mean'], 2),
-                '逆推終端速度 vt (m/s)': round(p['vt'], 2),
-                '空氣阻力係數 k (kg/m)': round(p['k'], 4),
-                '終端空氣阻力 F_t = mg (N)': round(avg_weight_kg * 9.8, 3)
-            })
-        st.table(pd.DataFrame(param_rows))
-
-        # 顯示動態曲線圖
-        b64_dyn = base64.b64encode(bytes_dyn).decode('utf-8')
-        st.html(f"""
-        <div style="text-align: center; margin: 15px 0;">
-            <img src="data:image/png;base64,{b64_dyn}" style="width: 100%; max-width: 1100px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        </div>
-        """)
-
-        st.divider()
-
-        # =============================================================
-        # 功能 3：雙層結構數據表與 CSV 下載
+        # 功能 2：整齊雙層結構數據表 + CSV 下載
         # =============================================================
         st.subheader("📋 物理量計算數據總表")
         st.markdown("依據實測量次 1～20 完整呈現各傘滯空時間、平均加速度與平均阻力：")
 
+        # CSV 下載按鈕
         csv_bytes = df_csv.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
         st.download_button(
             label="📥 下載計算數據總表 (CSV 格式)",
@@ -401,7 +369,9 @@ if uploaded_file is not None:
 
         st.write("")
 
+        # 轉換為標準 HTML 雙層標頭表格，格式完全比照「分析圖表」
         table_html = df_display.to_html(classes="report-table", na_rep="-")
+        
         full_table_code = f"""
         <style>
         .report-table-box {{
