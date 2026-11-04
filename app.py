@@ -11,8 +11,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# Matplotlib 中文字型設定 (相容 本地 Mac/Windows 與 雲端 Linux 伺服器)
+# Matplotlib 中文字型設定 (相容雲端 Linux 與本地系統)
 plt.rcParams['font.sans-serif'] = [
+    'WenQuanYi Zen Hei',
     'Noto Sans CJK TC',
     'Noto Sans TC',
     'PingFang TC',
@@ -24,65 +25,74 @@ plt.rcParams['axes.unicode_minus'] = False
 
 
 # =====================================================================
-# 1. 數據讀取與物理量計算函數
+# 1. 自動從 Excel「數據記錄表」讀取物理參數與實測數據
 # =====================================================================
-def process_parachute_data(uploaded_file, custom_height=None):
+def process_parachute_data(uploaded_file):
     xls = pd.ExcelFile(uploaded_file)
     df_raw = pd.read_excel(xls, sheet_name='數據記錄表')
 
-    if custom_height is not None and custom_height > 0:
-        height_m = custom_height
-    else:
-        try:
-            height_m = float(df_raw.iloc[10, 12])
-        except:
+    # (A) 自動讀取樓高平均值 (M12 儲存格，對應 row 10, col 12)
+    try:
+        height_m = float(df_raw.iloc[10, 12])
+        if np.isnan(height_m) or height_m <= 0:
             height_m = 8.33
+    except Exception:
+        height_m = 8.33
 
-    weights_kg = {
-        '傘1': 0.21002,
-        '傘2': 0.24378,
-        '傘3': 0.24313,
-        '傘4': 0.23231
-    }
-    g = 9.8
+    # (B) 自動讀取「全部成員的平均重量」(M5 儲存格，對應 row 3, col 12)
+    try:
+        avg_weight_g = float(df_raw.iloc[3, 12])
+        if np.isnan(avg_weight_g) or avg_weight_g <= 0:
+            avg_weight_g = 232.31
+    except Exception:
+        avg_weight_g = 232.31
+        
+    # 換算為公斤：所有傘組統一使用此一平均重量
+    avg_weight_kg = avg_weight_g / 1000.0
+    g = 9.8  # 重力加速度 (m/s^2)
 
-    umbrella_list = ['傘1', '傘2', '傘3', '傘4']
+    # (C) 讀取 4 組傘實測滯空時間 (B2:E21)
+    umbrella_names = ['傘1', '傘2', '傘3', '傘4']
     raw_times = df_raw.iloc[0:20, 1:5].copy()
-    raw_times.columns = umbrella_list
+    raw_times.columns = umbrella_names
 
     all_meas = {}
     all_sim = {}
     active_umbrellas = []
     summary_records = []
 
-    np.random.seed(42)
+    np.random.seed(42)  # 固定隨機種子，確保每次模擬結果一致且可重現
 
-    for u_name in umbrella_list:
+    for u_name in umbrella_names:
+        # 清理可能輸入為逗號的小數點 (如 2,94 轉為 2.94)
         col_series = raw_times[u_name].astype(str).str.replace(',', '.')
         times_clean = pd.to_numeric(col_series, errors='coerce').dropna()
         times_clean = times_clean[times_clean > 0].values
 
         if len(times_clean) > 0:
             active_umbrellas.append(u_name)
-            m = weights_kg.get(u_name, 0.232)
 
+            # 實測物理量計算 (全部統一使用平均重量 avg_weight_kg)：
+            # 1. a = 2H / t^2
+            # 2. F_drag = m_avg * (g - a)
             accels_clean = (2.0 * height_m) / (times_clean ** 2)
-            drags_clean = m * (g - accels_clean)
+            drags_clean = avg_weight_kg * (g - accels_clean)
 
             all_meas[u_name] = {
                 'times': times_clean,
                 'accels': accels_clean,
                 'drags': drags_clean,
-                'mass': m
+                'mass': avg_weight_kg
             }
 
+            # 各傘 20 次蒙地卡羅模擬
             mean_t = np.mean(times_clean)
             std_t = np.std(times_clean) if np.std(times_clean) > 0 else 0.3
             sim_times = np.random.normal(loc=mean_t, scale=std_t, size=20)
             sim_times = np.clip(sim_times, a_min=1.0, a_max=None)
 
             sim_accels = (2.0 * height_m) / (sim_times ** 2)
-            sim_drags = m * (g - sim_accels)
+            sim_drags = avg_weight_kg * (g - sim_accels)
 
             all_sim[u_name] = {
                 'times': sim_times,
@@ -90,6 +100,7 @@ def process_parachute_data(uploaded_file, custom_height=None):
                 'drags': sim_drags
             }
 
+            # 彙整匯出數據
             for i in range(len(times_clean)):
                 summary_records.append({
                     '傘別': u_name,
@@ -111,21 +122,21 @@ def process_parachute_data(uploaded_file, custom_height=None):
                 })
 
     df_summary = pd.DataFrame(summary_records)
-    return active_umbrellas, all_meas, all_sim, height_m, df_summary
+    return active_umbrellas, all_meas, all_sim, height_m, avg_weight_g, df_summary
 
 
 # =====================================================================
-# 2. 繪製精美 4 象限圖表
+# 2. 繪製精美 4 象限圖表函數
 # =====================================================================
-def generate_figure(active_umbrellas, all_meas, all_sim, height_m):
+def generate_figure(active_umbrellas, all_meas, all_sim):
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     fig.suptitle('【傘1～傘4】實際測量數據 vs. 20 次模擬數據之全體物理量對比', fontsize=16, fontweight='bold')
 
     color_map = {
-        '傘1': '#1f77b4',
-        '傘2': '#2ca02c',
-        '傘3': '#ff7f0e',
-        '傘4': '#9467bd'
+        '傘1': '#1f77b4',  # 藍
+        '傘2': '#2ca02c',  # 綠
+        '傘3': '#ff7f0e',  # 橘
+        '傘4': '#9467bd'   # 紫
     }
 
     # 子圖 1：a - t
@@ -170,7 +181,7 @@ def generate_figure(active_umbrellas, all_meas, all_sim, height_m):
     ax3.grid(True, linestyle='--', alpha=0.5)
     ax3.legend(ncol=2, fontsize=9)
 
-    # 子圖 4：箱形圖
+    # 子圖 4：4 組箱形圖
     ax4 = axes[1, 1]
     positions = []
     box_data = []
@@ -200,27 +211,37 @@ def generate_figure(active_umbrellas, all_meas, all_sim, height_m):
 
 
 # =====================================================================
-# 3. 網頁畫面佈局
+# 3. Streamlit 網頁主畫面佈局
 # =====================================================================
 st.title("🪂 寶特瓶降落傘探究與實作：物理分析與模擬系統")
-st.markdown("請在左側上傳 Excel 檔案，系統將自動完成物理量計算、產生 20 次模擬數據並繪製 4 象限分析圖！")
+st.markdown("學生只需上傳 Excel 檔案，系統自動提取**實測樓高平均值與全體平均重量**，完成物理計算並繪製圖表！")
 
-st.sidebar.header("⚙️ 參數設定與檔案上傳")
-uploaded_file = st.sidebar.file_uploader("上傳 Excel 數據表 (.xlsx)", type=["xlsx"])
-custom_h = st.sidebar.number_input("自訂投擲高度 H (公尺，0 代表自動讀取 Excel)", min_value=0.0, max_value=30.0, value=0.0, step=0.1)
+# 側邊欄：純檔案上傳
+st.sidebar.header("📁 資料匯入")
+uploaded_file = st.sidebar.file_uploader("請選擇 Excel 數據表 (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
     try:
-        height_arg = custom_h if custom_h > 0 else None
-        active_umbrellas, all_meas, all_sim, used_h, df_summary = process_parachute_data(uploaded_file, height_arg)
+        active_umbrellas, all_meas, all_sim, used_h, avg_w, df_summary = process_parachute_data(uploaded_file)
 
-        st.sidebar.success(f"✅ 檔案讀取成功！\n使用高度 H = {used_h:.2f} m\n包含傘組：{', '.join(active_umbrellas)}")
+        # 頂部儀表板：確認自動提取到的物理參數
+        st.success("✅ 檔案讀取成功！系統已自 Excel 檔案中自動讀取以下統一參數：")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("🏢 自動讀取樓高平均值 (M12)", f"{used_h:.3f} 公尺")
+        col2.metric("⚖️ 全體成員平均重量 (M5)", f"{avg_w:.2f} 公克")
+        col3.metric("🪂 成功識別之有效傘組", f"{len(active_umbrellas)} 組 ({', '.join(active_umbrellas)})")
 
-        # 呈現圖表與下載按鈕
+        st.caption(f"💡 說明：本組所有傘組的空氣阻力計算，皆統一採用全體平均質量 $\\bar{{m}} = {avg_w/1000.0:.4f}\\text{{ kg}}$。")
+        st.divider()
+
+        # -------------------------------------------------------------
+        # 功能 (1)：四象限圖表呈現與另存新檔按鈕
+        # -------------------------------------------------------------
         st.subheader("📊 物理量關聯分析與箱形圖對比")
-        fig = generate_figure(active_umbrellas, all_meas, all_sim, used_h)
+        fig = generate_figure(active_umbrellas, all_meas, all_sim)
         st.pyplot(fig)
 
+        # 高解析度 PNG 匯出
         img_buffer = io.BytesIO()
         fig.savefig(img_buffer, format="png", dpi=300, bbox_inches="tight")
         img_buffer.seek(0)
@@ -234,7 +255,9 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # 呈現表格與下載按鈕
+        # -------------------------------------------------------------
+        # 功能 (2)：輸出計算數據與 CSV 匯出按鈕
+        # -------------------------------------------------------------
         st.subheader("📋 實測與 20 次模擬計算數據總表")
         selected_u = st.multiselect("篩選檢視特定傘組：", options=active_umbrellas, default=active_umbrellas)
         filtered_df = df_summary[df_summary['傘別'].isin(selected_u)]
@@ -250,6 +273,6 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"⚠️ 處理檔案時發生錯誤：{e}")
-        st.info("請確認上傳的檔案包含「數據記錄表」工作表，且 B2:E21 欄位包含各傘滯空時間。")
+        st.info("請確認上傳的 Excel 檔案包含「數據記錄表」工作表，且具備 M12（樓高）與 M5（重量）儲存格。")
 else:
-    st.info("👈 請於左側邊欄點擊「Browse files」上傳 Excel 檔案（如 plot.xlsx）即可開始分析！")
+    st.info("👈 請於左側邊欄點擊「Browse files」上傳學生的 Excel 檔案（如 plot.xlsx）！")
