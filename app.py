@@ -383,3 +383,29 @@ if uploaded_file is not None:
             z-index: 2;
         }}
         .report-table tr:nth-child(even) {{
+            background-color: #f8fafc;
+        }}
+        .report-table tr:hover {{
+            background-color: #e0f2fe;
+        }}
+        </style>
+        <div class="report-table-box">
+            {table_html}
+        </div>
+        """
+        st.markdown(styled_html, unsafe_allow_html=True)
+
+        # 提供標準 CSV 下載
+        csv_bytes = df_csv.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+        st.download_button(
+            label="📥 下載計算數據總表 (CSV 格式)",
+            data=csv_bytes,
+            file_name="降落傘物理分析計算總表.csv",
+            mime="text/csv"
+        )
+
+    except Exception as e:
+        st.error(f"⚠️ 處理檔案時發生錯誤：{e}")
+        st.info("請確認上傳的 Excel 檔案包含「數據記錄表」工作表，且具備 M12（樓高）與 M5（重量）儲存格。")
+else:
+    st.info("👈 請於左側邊欄點擊「Browse files」上傳學生的 Excel 檔案（如 plot.xlsx）！")
