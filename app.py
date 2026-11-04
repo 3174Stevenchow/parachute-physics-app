@@ -13,7 +13,7 @@ import streamlit as st
 
 # 設定網頁標題與寬螢幕版面配置
 st.set_page_config(
-    page_title="寶特瓶降落傘物理分析系統",
+    page_title="降落傘組力分析系統",
     page_icon="🪂",
     layout="wide"
 )
