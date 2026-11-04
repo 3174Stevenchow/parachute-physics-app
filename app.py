@@ -332,4 +332,102 @@ if uploaded_file is not None:
         b64_box = base64.b64encode(bytes_box).decode('utf-8')
 
         st.html(f"""
-        <div style="display: grid
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 10px;">
+            <div style="text-align: center; background: #ffffff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+                <img src="data:image/png;base64,{b64_at}" style="width: 100%; border-radius: 4px;">
+                <p style="margin-top: 8px; font-weight: bold; color: #334155;">圖 1：平均加速度 vs. 滯空時間</p>
+            </div>
+            <div style="text-align: center; background: #ffffff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+                <img src="data:image/png;base64,{b64_ft}" style="width: 100%; border-radius: 4px;">
+                <p style="margin-top: 8px; font-weight: bold; color: #334155;">圖 2：平均空氣阻力 vs. 滯空時間</p>
+            </div>
+            <div style="text-align: center; background: #ffffff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+                <img src="data:image/png;base64,{b64_fa}" style="width: 100%; border-radius: 4px;">
+                <p style="margin-top: 8px; font-weight: bold; color: #334155;">圖 3：平均空氣阻力 vs. 平均加速度</p>
+            </div>
+            <div style="text-align: center; background: #ffffff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+                <img src="data:image/png;base64,{b64_box}" style="width: 100%; border-radius: 4px;">
+                <p style="margin-top: 8px; font-weight: bold; color: #334155;">圖 4：滯空時間分佈箱形圖</p>
+            </div>
+        </div>
+        """)
+
+        st.divider()
+
+        # =============================================================
+        # 功能 2：整齊雙層結構數據表 + CSV 下載
+        # =============================================================
+        st.subheader("📋 物理量計算數據總表")
+        st.markdown("依據實測量次 1～20 完整呈現各傘滯空時間、平均加速度與平均阻力：")
+
+        # CSV 下載按鈕
+        csv_bytes = df_csv.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+        st.download_button(
+            label="📥 下載計算數據總表 (CSV 格式)",
+            data=csv_bytes,
+            file_name="降落傘物理分析計算總表.csv",
+            mime="text/csv"
+        )
+
+        st.write("")
+
+        # 使用 st.html 渲染原生雙層表格，確保無標籤外漏
+        table_html = df_display.to_html(classes="report-table", na_rep="-")
+        
+        full_table_code = f"""
+        <style>
+        .report-table-box {{
+            max-height: 520px;
+            overflow: auto;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            margin: 10px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        .report-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 13.5px;
+            text-align: center;
+        }}
+        .report-table th, .report-table td {{
+            border: 1px solid #cbd5e1;
+            padding: 8px 10px;
+            white-space: nowrap;
+        }}
+        .report-table thead tr:first-child th {{
+            background-color: #1e3a8a;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 3;
+        }}
+        .report-table thead tr:nth-child(2) th {{
+            background-color: #2563eb;
+            color: #ffffff;
+            font-size: 13px;
+            position: sticky;
+            top: 36px;
+            z-index: 2;
+        }}
+        .report-table tr:nth-child(even) {{
+            background-color: #f8fafc;
+        }}
+        .report-table tr:hover {{
+            background-color: #e0f2fe;
+        }}
+        </style>
+        <div class="report-table-box">
+            {table_html}
+        </div>
+        """
+        st.html(full_table_code)
+
+    except Exception as e:
+        st.error(f"⚠️ 處理檔案時發生錯誤：{e}")
+        st.info("請確認上傳的 Excel 檔案包含「數據記錄表」工作表，且具備 M12（樓高）與 M5（重量）儲存格。")
+else:
+    st.info("👈 請於左側邊欄點擊「Browse files」上傳學生的 Excel 檔案（如 plot.xlsx）！")
