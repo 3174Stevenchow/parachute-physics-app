@@ -204,4 +204,118 @@ def generate_figure(active_umbrellas, all_meas, theory_curve):
 # 3. Streamlit 網頁主畫面佈局
 # =====================================================================
 st.title("🪂 寶特瓶降落傘探究與實作：物理分析系統")
-st.markdown("上傳各組降落傘的 Excel 數據檔，系統自動載入**實測樓高與全體平均重量**，繪製實測分佈與唯一
+st.markdown("上傳各組降落傘的 Excel 數據檔，系統自動載入**實測樓高與全體平均重量**，繪製實測分佈與唯一理論計算對照線！")
+
+st.sidebar.header("📁 資料匯入")
+uploaded_file = st.sidebar.file_uploader("請選擇 Excel 數據表 (.xlsx)", type=["xlsx"])
+
+if uploaded_file is not None:
+    try:
+        active_umbrellas, all_meas, theory_curve, used_h, avg_w, df_summary = process_parachute_data(uploaded_file)
+
+        # 頂部參數摘要 (純 HTML 卡片，穩定且無任何模組錯誤)
+        st.markdown(f"""
+        <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h4 style="color: #166534; margin: 0 0 10px 0;">✅ 檔案讀取成功！已自 Excel 自動提取統一實驗參數：</h4>
+            <div style="display: flex; gap: 30px; font-size: 16px;">
+                <div>🏢 <b>樓高平均值 (M12)：</b> <span style="color:#1d4ed8; font-weight:bold;">{used_h:.3f} 公尺</span></div>
+                <div>⚖️ <b>全體平均重量 (M5)：</b> <span style="color:#b45309; font-weight:bold;">{avg_w:.2f} 公克</span></div>
+                <div>🪂 <b>有效實測傘組：</b> <span style="color:#047857; font-weight:bold;">{', '.join(active_umbrellas)}</span></div>
+            </div>
+            <div style="margin-top: 8px; font-size: 13px; color: #4b5563;">
+                💡 說明：空氣阻力計算與理論基準線，皆統一採用全體平均質量 m = {avg_w/1000.0:.4f} kg 與樓高 H = {used_h:.3f} m。
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.divider()
+
+        # -------------------------------------------------------------
+        # 輸出 1：圖表直接以 Base64 原生 HTML 顯示 (不經由 st.image，絕不報錯)
+        # -------------------------------------------------------------
+        st.subheader("📊 實測物理量關聯分析與理論對照圖")
+        
+        fig = generate_figure(active_umbrellas, all_meas, theory_curve)
+        img_buffer = io.BytesIO()
+        fig.savefig(img_buffer, format="png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        img_bytes = img_buffer.getvalue()
+        img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+
+        # 純原生 HTML 標籤渲染圖片
+        st.markdown(
+            f'<div style="text-align: center; margin: 15px 0;">'
+            f'<img src="data:image/png;base64,{img_b64}" style="width: 100%; max-width: 1200px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        st.download_button(
+            label="💾 下載高解析度圖檔 (PNG, 300 DPI)",
+            data=img_bytes,
+            file_name="降落傘物理分析與理論對照圖.png",
+            mime="image/png"
+        )
+
+        st.divider()
+
+        # -------------------------------------------------------------
+        # 輸出 2：數據直接以純 HTML 表格印在網頁上 (不經由 st.dataframe，絕不報錯)
+        # -------------------------------------------------------------
+        st.subheader("📋 實測物理量計算數據總表")
+        st.markdown(f"共計讀入 **{len(df_summary)}** 筆實測數據：")
+
+        # 建立美觀、具備垂直捲軸的純原生 HTML 表格
+        html_table = df_summary.to_html(index=False, classes="custom-table")
+        custom_css = """
+        <style>
+        .table-container {
+            max-height: 420px;
+            overflow-y: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        .custom-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: sans-serif;
+            font-size: 14px;
+            text-align: center;
+        }
+        .custom-table th {
+            background-color: #1e3a8a;
+            color: #ffffff;
+            padding: 10px;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        .custom-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .custom-table tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+        .custom-table tr:hover {
+            background-color: #e2e8f0;
+        }
+        </style>
+        """
+        st.markdown(custom_css + f'<div class="table-container">{html_table}</div>', unsafe_allow_html=True)
+
+        # 提供 CSV 下載按鈕
+        csv_data = df_summary.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+        st.download_button(
+            label="📥 下載實測計算數據總表 (CSV 格式)",
+            data=csv_data,
+            file_name="降落傘實測物理量計算表.csv",
+            mime="text/csv"
+        )
+
+    except Exception as e:
+        st.error(f"⚠️ 處理檔案時發生錯誤：{e}")
+        st.info("請確認上傳的 Excel 檔案包含「數據記錄表」工作表，且具備 M12（樓高）與 M5（重量）儲存格。")
+else:
+    st.info("👈 請於左側邊欄點擊「Browse files」上傳學生的 Excel 檔案（如 plot.xlsx）！")
