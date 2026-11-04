@@ -452,4 +452,10 @@ if uploaded_file is not None:
             {table_html}
         </div>
         """
-        st.
+        st.html(full_table_code)
+
+    except Exception as e:
+        st.error(f"⚠️ 處理檔案時發生錯誤：{e}")
+        st.info("請確認上傳的 Excel 檔案包含「數據記錄表」工作表，且具備 M12（樓高）與 M5（重量）儲存格。")
+else:
+    st.info("👈 請於左側邊欄點擊「Browse files」上傳學生的 Excel 檔案（如 plot.xlsx）！")
