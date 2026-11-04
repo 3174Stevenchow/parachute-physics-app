@@ -414,4 +414,58 @@ if uploaded_file is not None:
         
         full_table_code = f"""
         <style>
-        .report
+        .report-table-box {{
+            max-height: 520px;
+            overflow: auto;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            margin: 10px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        .report-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 13.5px;
+            text-align: center;
+        }}
+        .report-table th, .report-table td {{
+            border: 1px solid #cbd5e1;
+            padding: 8px 10px;
+            white-space: nowrap;
+        }}
+        .report-table thead tr:first-child th {{
+            background-color: #1e3a8a;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 3;
+        }}
+        .report-table thead tr:nth-child(2) th {{
+            background-color: #2563eb;
+            color: #ffffff;
+            font-size: 13px;
+            position: sticky;
+            top: 36px;
+            z-index: 2;
+        }}
+        .report-table tr:nth-child(even) {{
+            background-color: #f8fafc;
+        }}
+        .report-table tr:hover {{
+            background-color: #e0f2fe;
+        }}
+        </style>
+        <div class="report-table-box">
+            {table_html}
+        </div>
+        """
+        st.html(full_table_code)
+
+    except Exception as e:
+        st.error(f"⚠️ 處理檔案時發生錯誤：{e}")
+        st.info("請確認上傳的 Excel 檔案包含「數據記錄表」工作表，且具備 M12（樓高）與 M5（重量）儲存格。")
+else:
+    st.info("👈 請於左側邊欄點擊「Browse files」上傳學生的 Excel 檔案（如 plot.xlsx）！")
